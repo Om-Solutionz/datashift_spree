@@ -36,7 +36,7 @@ module DatashiftSpree
 
       input = options[:input]
 
-      loader = DatashiftSpree::ProductLoader.new(input)
+      loader = ::DatashiftSpree::ProductLoader.new(input)
 
       # YAML configuration file to drive defaults etc
 
