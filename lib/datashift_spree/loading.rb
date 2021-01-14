@@ -76,7 +76,7 @@ module DatashiftSpree
     def add_images( record, owner = nil )
 
       # Spree 3 - Images stored on Variant (record.master if record is a Product)
-      byebug
+
       owner ||=  record.is_a?(Spree::Product) ? record.master : record
 
       value.to_s.split(multi_assoc_delim).each do |image|

@@ -111,6 +111,7 @@ module DatashiftSpree
         add_variants_stock(value)
       else
         super(method_binding, product_load_object, value) if(value.present?)
+        assign_stores("has_many",product_load_object)
       end
 
     end
@@ -134,6 +135,30 @@ module DatashiftSpree
     #
     #     mime_type:jpeg;print_type:black_white|mime_type:jpeg|mime_type:png, PDF;print_type:colour
     #
+    #
+
+    def assign_stores(relation_delim, object)
+      dir_files_name                = DataShift::Downloader.get_uploaded_file_names
+      required_uploaded_file_name   = dir_files_name.first
+      store_id_from_file            = required_uploaded_file_name.split('|')
+                                                                  .first
+                                                                  .split('-')
+                                                                  .last  rescue ""
+
+      if check_for_store_import_models && store_id_from_file.present?
+        store_obj = Spree::Store.find_by(id: store_id_from_file)
+        if relation_delim == 'has_many'
+          object.stores << store_obj
+        else
+          object.store  = store_obj
+        end
+      end
+    end
+
+    def check_for_store_import_models
+      defined?(PRODUCT_IMPORT_DEPENDENT_MODELS).present? && PRODUCT_IMPORT_DEPENDENT_MODELS.include?("Store")
+    end
+
     def build_option_types(option_types)
 
       optiontype_vlist_map = {}
@@ -332,6 +357,8 @@ module DatashiftSpree
 
         parent_taxonomy = taxonomy_klass.where(:name => parent_name).first_or_create
 
+        assign_stores("belongs_to",parent_taxonomy)
+        parent_taxonomy.save(validate: false)
         raise DataShift::DataProcessingError.new("Could not find or create Taxonomy #{parent_name}") unless parent_taxonomy
 
         parent = parent_taxonomy.root
@@ -394,8 +421,6 @@ module DatashiftSpree
 
         variants = @product_load_object.variants
         logger.info "Variants: #{variants.inspect}"
-
-        byebug
 
         stock_coh_list = value.to_s.split(multi_assoc_delim) # we expect to get corresponding stock_location:count_on_hand for every variant
 
@@ -464,25 +489,13 @@ module DatashiftSpree
       # do we have Variants?
       if(@product_load_object.variants.size > 0)
 
-        logger.info "[VARIANT IMAGES] - number of variants to process #{@product_load_object.variants.size}"
-
-        if(data.to_s.include?(multi_assoc_delim))
-          # Check if we've already processed Variants and assign count per variant
-          values = data.to_s.split(multi_assoc_delim)
-          # variants and variant_images number match?
-          raise "WARNING: Variant Images entries did not match number of Variants - None Set" unless (@product_load_object.variants.size == values.size)
-        end
-
         variants = @product_load_object.variants
 
-        logger.info "Variants: #{variants.inspect}"
-
-        # we expect to get corresponding images for every variant (might have more than one image for each variant!)
         variants_images_list = value.to_s.split(multi_assoc_delim)
 
         variants_images_list.each_with_index do |variant_images, i|
 
-          if(variant_images.to_s.include?(multi_value_delim))
+          if(variant_images.to_s.include?(','))
             # multiple images
             images = variant_images.to_s.split(multi_value_delim)
           else
@@ -491,218 +504,23 @@ module DatashiftSpree
             images << variant_images
           end
 
-          logger.info "Setting #{images.count} images for variant #{variants[i].name}..."
-
-          # reset variant images to attach to variant
-          var_images = []
-
-          # Image processing...
-          logger.debug "Images to process: #{images.inspect} for variant #{variants[i].name}"
           images.each do |image|
-
-            if(image.match(DatashiftSpree::SPREE_URI_REGEX))
-
-              uri, attributes = image.split(attribute_list_start)
-
-              uri.strip!
-
-              logger.info("Processing IMAGE from URI [#{uri.inspect}]")
-
-              if(attributes)
-                #TODO move to ColumnPacker unpack ?
-                attributes = attributes.split(', ').map{|h| h1,h2 = h.split('=>'); {h1.strip! => h2.strip!}}.reduce(:merge)
-                logger.debug("IMAGE has additional attributes #{attributes.inspect}")
-              else
-                attributes = {} # will blow things up later if we pass nil where {} expected
-              end
-
-              agent = Mechanize.new
-
-              image = begin
-                        agent.get(uri)
-                      rescue => e
-                        puts "ERROR: Failed to fetch image from URL #{uri}", e.message
-                        raise DataShift::BadUri.new("Failed to fetch image from URL #{uri}")
-                      end
-
-              # Expected image is_a Mechanize::Image
-              # image.filename& image.extract_filename do not handle query string well e,g blah.jpg?v=1234
-              # so for now use URI
-              # extname = image.respond_to?(:filename) ? File.extname(image.filename) : File.extname(uri)
-              extname = File.extname( uri.gsub(/\?.*=.*/, ''))
-
-              base = image.respond_to?(:filename) ? File.basename(image.filename, '.*') : File.basename(uri, '.*')
-
-              logger.debug("Storing Image in TempFile #{base.inspect}.#{extname.inspect}")
-
-              @current_image_temp_file = Tempfile.new([base, extname], :encoding => 'ascii-8bit')
-
-              begin
-
-                # TODO can we handle embedded img src e.g from Mechanize::Page::Image ?
-
-                # If I call image.save(@current_image_temp_file.path) then it creates a new file with a .1 extension
-                # so the real temp file data is empty and paperclip chokes
-                # so this is a copy from the Mechanize::Image save method.  don't like it much, very brittle, but what to do ...
-                until image.body_io.eof? do
-                  @current_image_temp_file.write image.body_io.read 16384
-                end
-
-                @current_image_temp_file.rewind
-
-                logger.info("IMAGE downloaded from URI #{uri.inspect}")
-
-                attachment = create_attachment(Spree::Image, @current_image_temp_file.path, nil, nil, attributes)
-
-              rescue => e
-                logger.error(e.message)
-                logger.error("Failed to create Image from URL #{uri}")
-                raise DataShift::DataProcessingError.new("Failed to create Image from URL #{uri}")
-
-              ensure
-                @current_image_temp_file.close
-                @current_image_temp_file.unlink
-              end
-
-            else
-
-              path, alt_text = image.split(name_value_delim)
-
-              alt_text = variants[i].name if !alt_text #ensure alt_text is filled
-
-              logger.debug("Processing IMAGE from PATH #{path.inspect} #{alt_text.inspect}")
-
-              path = File.join(config[:image_path_prefix], path) if(config[:image_path_prefix])
-
-              attachment = create_attachment(Spree::Image, path, nil, nil, :alt => alt_text)
-
-            end
-
-            logger.debug "#{attachment.inspect}"
-            var_images << attachment if attachment
-
-          end # images loop
-
-          # we have our variant images. Save them!
-          begin
-            # Link images to corresponding variant
-            variants[i].images << var_images
-            variants[i].save
-            logger.debug("Variant assigned Images from : #{var_images.inspect}")
-          rescue => e
-            puts "ERROR - Failed to assign attachments to #{variants[i].class} #{variants[i].id}"
-            logger.error("Failed to assign attachments to #{variants[i].class} #{variants[i].id}")
-          end
-
-        end # variants_images_list loop
-
-        # ... or just single Master Product?
-      elsif(@product_load_object.variants.size == 0)
-
-        if(data.to_s.include?(multi_value_delim))
-          # multiple images
-          images = data.to_s.split(multi_value_delim)
-        else
-          # single image
-          images << variant_images
-        end
-
-        logger.info "Setting #{images.count} images for Master variant #{@product_load_object.master.name}..."
-
-        # Image processing...
-        images.each do |image|
-
-          if(image.match(DatashiftSpree::SPREE_URI_REGEX))
-
-            uri, attributes = image.split(attribute_list_start)
-
-            uri.strip!
-
-            logger.info("Processing IMAGE from URI [#{uri.inspect}]")
-
-            if(attributes)
-              #TODO move to ColumnPacker unpack ?
-              attributes = attributes.split(', ').map{|h| h1,h2 = h.split('=>'); {h1.strip! => h2.strip!}}.reduce(:merge)
-              logger.debug("IMAGE has additional attributes #{attributes.inspect}")
-            else
-              attributes = {} # will blow things up later if we pass nil where {} expected
-            end
-
-            agent = Mechanize.new
-
-            image = begin
-                      agent.get(uri)
-                    rescue => e
-                      puts "ERROR: Failed to fetch image from URL #{uri}", e.message
-                      raise DataShift::BadUri.new("Failed to fetch image from URL #{uri}")
-                    end
-
-            # Expected image is_a Mechanize::Image
-            # image.filename& image.extract_filename do not handle query string well e,g blah.jpg?v=1234
-            # so for now use URI
-            # extname = image.respond_to?(:filename) ? File.extname(image.filename) : File.extname(uri)
-            extname = File.extname( uri.gsub(/\?.*=.*/, ''))
-
-            base = image.respond_to?(:filename) ? File.basename(image.filename, '.*') : File.basename(uri, '.*')
-
-            logger.debug("Storing Image in TempFile #{base.inspect}.#{extname.inspect}")
-
-            @current_image_temp_file = Tempfile.new([base, extname], :encoding => 'ascii-8bit')
-
             begin
+              record = variants[i]
+              image_url = image
+              filename  = File.basename(URI.parse(image_url).path)
+              file      = URI.open(image_url)
+              new_image = record.images.new
+              new_image.attachment.attach(io: file, filename: filename)
+              new_image.save(validate: false)
 
-              # TODO can we handle embedded img src e.g from Mechanize::Page::Image ?
-
-              # If I call image.save(@current_image_temp_file.path) then it creates a new file with a .1 extension
-              # so the real temp file data is empty and paperclip chokes
-              # so this is a copy from the Mechanize::Image save method.  don't like it much, very brittle, but what to do ...
-              until image.body_io.eof? do
-                @current_image_temp_file.write image.body_io.read 16384
-              end
-
-              @current_image_temp_file.rewind
-
-              logger.info("IMAGE downloaded from URI #{uri.inspect}")
-
-              attachment = create_attachment(Spree::Image, @current_image_temp_file.path, nil, nil, attributes)
-
+              # logger.debug("Variant assigned Images from : #{var_images.inspect}")
             rescue => e
-              logger.error(e.message)
-              logger.error("Failed to create Image from URL #{uri}")
-              raise DataShift::DataProcessingError.new("Failed to create Image from URL #{uri}")
-
-            ensure
-              @current_image_temp_file.close
-              @current_image_temp_file.unlink
+              puts "ERROR - Failed to assign attachments to #{variants[i].class} #{variants[i].id}"
+              logger.error("Failed to assign attachments to #{variants[i].class} #{variants[i].id}")
             end
 
-          else
-            path, alt_text = image.split(name_value_delim)
-
-            alt_text = @product_load_object.master.name if !alt_text #ensure alt_text is filled
-
-            logger.debug("Processing IMAGE from PATH #{path.inspect} #{alt_text.inspect}")
-
-            path = File.join(config[:image_path_prefix], path) if(config[:image_path_prefix])
-
-            # create_attachment(klass, attachment_path, product_load_object = nil, attach_to_product_load_object_field = nil, options = {})
-            attachment = create_attachment(Spree::Image, path, nil, nil, :alt => alt_text)
-
           end
-
-          var_images << attachment if attachment
-
-        end # images loop
-
-        # we have our variant images. Save them!
-        begin
-          # Link images to corresponding variant
-          @product_load_object.master.images << var_images
-          @product_load_object.master.save
-          logger.debug("Master Variant assigned Images from : #{var_images.inspect}")
-        rescue => e
-          puts "ERROR - Failed to assign attachment to #{@product_load_object.master.class} #{@product_load_object.master.id}"
-          logger.error("Failed to assign attachment to #{@product_load_object.master.class} #{@product_load_object.master.id}")
         end
 
       end
