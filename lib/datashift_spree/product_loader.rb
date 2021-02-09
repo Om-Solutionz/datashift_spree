@@ -34,6 +34,7 @@ module DatashiftSpree
     #
     def force_inclusion_columns
       @force_inclusion_columns ||= %w{  cost_price
+                                        sale_price
                                         count_on_hand
                                         images
                                         option_types

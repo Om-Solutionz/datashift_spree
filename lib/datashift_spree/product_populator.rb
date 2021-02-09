@@ -23,6 +23,13 @@ module DatashiftSpree
       value, attribute_hash = prepare_data(method_binding, data)
 
       @product_load_object = record
+      if record.present? && record.sku.present?
+        master_variant = Spree::Variant.where(sku: record.sku).first
+        if master_variant.present?
+          product = master_variant.product
+          @product_load_object = product
+        end
+      end
 
       logger.debug("Populating data via Spree ProductPopulator [#{method_binding.operator}] - [#{value}]")
 
@@ -37,8 +44,45 @@ module DatashiftSpree
         add_options_variants
 
       elsif(method_binding.operator?('price') )
-
         product_load_object.price = value.to_f
+        if !product_load_object.new_record?
+          product_load_object.save
+        end
+
+      elsif(method_binding.operator?('cost_price'))
+        product_load_object.cost_price = value.to_f
+        if !product_load_object.new_record?
+          product_load_object.save
+        end
+
+      elsif(method_binding.operator?('shipping_category'))
+        if !product_load_object.new_record?
+          product_load_object&.shipping_category&.name = value
+          product_load_object.save
+        else
+          super(method_binding, product_load_object, value) if(value.present?)
+        end
+
+      elsif(method_binding.operator?('available_on'))
+        product_load_object.available_on = value
+        if !product_load_object.new_record?
+          product_load_object.save
+        end
+
+      elsif(method_binding.operator?('sale_price') )
+        if product_load_object.new_record?
+           product_load_object.save_if_new
+           product_load_object.put_on_sale value.to_f
+        else
+          product_load_object.put_on_sale value.to_f
+          product_load_object.save
+        end
+
+      elsif(method_binding.operator?('description') )
+        product_load_object.description = value
+        if !product_load_object.new_record?
+          product_load_object.save
+        end
 
       elsif(method_binding.operator?('taxons'))
 
@@ -106,7 +150,9 @@ module DatashiftSpree
       elsif( method_binding.operator?('stock_items') || method_binding.operator?('count_on_hand'))
         logger.info "Adding Variants Stock Items (count_on_hand)"
 
-        product_load_object.save_if_new
+        if product_load_object.new_record?
+          product_load_object.save_if_new
+        end
 
         add_variants_stock(value)
       else
@@ -214,7 +260,9 @@ module DatashiftSpree
 
       # TODO smart column ordering to ensure always valid by time we get to associations
       begin
-        product_load_object.save_if_new
+        if product_load_object.new_record?
+          product_load_object.save_if_new
+        end
       rescue => e
         logger.error("Cannot add OptionTypes/Variants - Save Failed : #{e.inspect}")
         raise ProductLoadError.new("Cannot add OptionTypes/Variants - Save failed on parent Product")
@@ -275,18 +323,19 @@ module DatashiftSpree
 
             logger.info("Creating Variant on OptionValue(s) #{ov_list.collect(&:name).inspect}")
 
-            i = product_load_object.variants.size + 1
-
-            product_load_object.variants.create!(
-                :sku => "#{product_load_object.sku}_#{i}",
-                :price => product_load_object.price,
-                :weight => product_load_object.weight,
-                :height => product_load_object.height,
-                :width => product_load_object.width,
-                :depth => product_load_object.depth,
-                :tax_category_id => product_load_object.tax_category_id,
-                :option_values => ov_list
-            )
+            if !product_load_object.variants.map(&:option_values).include?(ov_list)
+              i = product_load_object.variants.size + 1
+              product_load_object.variants.create!(
+                  :sku => "#{product_load_object.sku}_#{i}",
+                  :price => product_load_object.price,
+                  :weight => product_load_object.weight,
+                  :height => product_load_object.height,
+                  :width => product_load_object.width,
+                  :depth => product_load_object.depth,
+                  :tax_category_id => product_load_object.tax_category_id,
+                  :option_values => ov_list
+              )
+            end
 
           end
         end
@@ -303,7 +352,9 @@ module DatashiftSpree
 
     def add_properties
       # TODO smart column ordering to ensure always valid by time we get to associations
-      product_load_object.save_if_new
+      if product_load_object.new_record?
+        product_load_object.save_if_new
+      end
 
       property_list = value.to_s.split(multi_assoc_delim)
 
@@ -344,7 +395,9 @@ module DatashiftSpree
 
     def add_taxons
       # TODO smart column ordering to ensure always valid by time we get to associations
-      product_load_object.save_if_new
+      if product_load_object.new_record?
+        product_load_object.save_if_new
+      end
 
       chain_list = value.to_s.split(multi_assoc_delim)  # potentially multiple chains in single column (delimited by multi_assoc_delim)
 
@@ -401,7 +454,9 @@ module DatashiftSpree
 
       return if data.blank?
 
-      product_load_object.save_if_new
+      if product_load_object.new_record?
+        product_load_object.save_if_new
+      end
 
       # location = Spree::StockLocation.find_or_create_by!(name: 'default')
 
@@ -484,7 +539,9 @@ module DatashiftSpree
 
     def add_variant_images(data)
 
-      product_load_object.save_if_new
+      if product_load_object.new_record?
+        product_load_object.save_if_new
+      end
 
       # do we have Variants?
       if(@product_load_object.variants.size > 0)
