@@ -22,16 +22,13 @@ module DatashiftSpree
 
       value, attribute_hash = prepare_data(method_binding, data)
 
+      @product_load_object = record
       if record.present? && record.sku.present?
         master_variant = Spree::Variant.where(sku: record.sku).first
         if master_variant.present?
           product = master_variant.product
           @product_load_object = product
-        else
-          @product_load_object = record
         end
-      else
-        @product_load_object = record
       end
 
       logger.debug("Populating data via Spree ProductPopulator [#{method_binding.operator}] - [#{value}]")
@@ -60,7 +57,7 @@ module DatashiftSpree
 
       elsif(method_binding.operator?('shipping_category'))
         if !product_load_object.new_record?
-          product_load_object.shipping_category.name = value
+          product_load_object&.shipping_category&.name = value
           product_load_object.save
         else
           super(method_binding, product_load_object, value) if(value.present?)
