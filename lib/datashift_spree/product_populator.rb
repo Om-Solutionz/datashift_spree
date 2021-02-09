@@ -58,6 +58,20 @@ module DatashiftSpree
           product_load_object.save
         end
 
+      elsif(method_binding.operator?('shipping_category'))
+        if !product_load_object.new_record?
+          product_load_object.shipping_category.name = value
+          product_load_object.save
+        else
+          super(method_binding, product_load_object, value) if(value.present?)
+        end
+
+      elsif(method_binding.operator?('available_on'))
+        product_load_object.available_on = value
+        if !product_load_object.new_record?
+          product_load_object.save
+        end
+
       elsif(method_binding.operator?('sale_price') )
         if product_load_object.new_record?
            product_load_object.save_if_new
@@ -69,6 +83,9 @@ module DatashiftSpree
 
       elsif(method_binding.operator?('description') )
         product_load_object.description = value
+        if !product_load_object.new_record?
+          product_load_object.save
+        end
 
       elsif(method_binding.operator?('taxons'))
 
