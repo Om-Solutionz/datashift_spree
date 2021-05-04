@@ -157,7 +157,7 @@ module DatashiftSpree
         add_variants_stock(value)
       else
         super(method_binding, product_load_object, value) if(value.present?)
-        assign_stores("has_many",product_load_object)
+        assign_vendor("has_one",product_load_object)
       end
 
     end
@@ -183,20 +183,18 @@ module DatashiftSpree
     #
     #
 
-    def assign_stores(relation_delim, object)
+    def assign_vendor(relation_delim, object)
       dir_files_name                = DataShift::Downloader.get_uploaded_file_names
       required_uploaded_file_name   = dir_files_name.first
-      store_id_from_file            = required_uploaded_file_name.split('|')
+      vendor_id_from_file           = required_uploaded_file_name.split('|')
                                                                   .first
                                                                   .split('-')
                                                                   .last  rescue ""
 
-      if check_for_store_import_models && store_id_from_file.present?
-        store_obj = Spree::Store.find_by(id: store_id_from_file)
-        if relation_delim == 'has_many'
-          object.stores << store_obj
-        else
-          object.store  = store_obj
+      if vendor_id_from_file.present?
+        vendor_obj = Spree::Vendor.find_by(id: vendor_id_from_file)
+        if relation_delim == 'has_one'
+          object.vendor = vendor_obj
         end
       end
     end
