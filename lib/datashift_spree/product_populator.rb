@@ -39,6 +39,7 @@ module DatashiftSpree
       #
       # Check takes care of headers in different forms like 'Option Types' 'option types' etc
       #
+
       if(method_binding.operator?('variants') || method_binding.operator?('option_types'))
 
         add_options_variants
@@ -407,9 +408,8 @@ module DatashiftSpree
         parent_name = name_list.shift
 
         parent_taxonomy = taxonomy_klass.where(:name => parent_name).first_or_create
-
-        assign_stores("belongs_to",parent_taxonomy)
-        parent_taxonomy.save(validate: false)
+        # assign_stores("belongs_to",parent_taxonomy)
+        # parent_taxonomy.save(validate: false)
         raise DataShift::DataProcessingError.new("Could not find or create Taxonomy #{parent_name}") unless parent_taxonomy
 
         parent = parent_taxonomy.root
